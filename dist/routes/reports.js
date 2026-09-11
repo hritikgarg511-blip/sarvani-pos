@@ -1,0 +1,23 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const express_1 = require("express");
+const client_1 = require("../db/client");
+const auth_1 = require("../middleware/auth");
+const router = (0, express_1.Router)();
+router.use(auth_1.requireAuth);
+router.get("/summary", (req, res) => {
+    const days = Math.min(Math.max(Number(req.query.days) || 30, 1), 365);
+    const since = Math.floor(Date.now() / 1000) - days * 86400;
+    const sales = client_1.sqliteConn.prepare(`SELECT COALESCE(SUM(grand_total),0) sales,COALESCE(SUM(discount_total),0) discounts,COUNT(*) bills FROM invoices WHERE status='COMPLETED' AND created_at>=?`).get(since);
+    const payments = client_1.sqliteConn.prepare(`SELECT mode,COALESCE(SUM(amount),0) amount FROM payments p JOIN invoices i ON i.id=p.invoice_id WHERE i.status='COMPLETED' AND i.created_at>=? GROUP BY mode ORDER BY amount DESC`).all(since);
+    const topProducts = client_1.sqliteConn.prepare(`SELECT ii.description,COALESCE(SUM(ii.quantity),0) quantity,COALESCE(SUM(ii.line_total),0) revenue FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE i.status='COMPLETED' AND i.created_at>=? GROUP BY ii.variant_id,ii.description ORDER BY revenue DESC LIMIT 10`).all(since);
+    const lowStock = client_1.sqliteConn.prepare(`SELECT * FROM (SELECT v.id variant_id,p.name product_name,v.sku,v.min_stock_level, (SELECT COALESCE(SUM(CASE WHEN type IN ('PURCHASE_IN','SALE_RETURN_IN','ADJUSTMENT_IN','OPENING_STOCK') THEN quantity WHEN type IN ('SALE_OUT','PURCHASE_RETURN_OUT','ADJUSTMENT_OUT') THEN -quantity ELSE 0 END),0) FROM stock_ledger WHERE variant_id=v.id) current_stock FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.active=1) x WHERE current_stock<=min_stock_level ORDER BY current_stock`).all();
+    const salesman = client_1.sqliteConn.prepare(`SELECT u.name,SUM(a.quantity) pieces,COALESCE(sp.commission_per_piece,0) commission_per_piece,SUM(a.quantity)*COALESCE(sp.commission_per_piece,0) commission FROM invoice_item_salespersons a JOIN users u ON u.id=a.user_id LEFT JOIN staff_profiles sp ON sp.user_id=u.id JOIN invoice_items ii ON ii.id=a.invoice_item_id JOIN invoices i ON i.id=ii.invoice_id WHERE i.status='COMPLETED' AND i.created_at>=? GROUP BY a.user_id ORDER BY pieces DESC`).all(since);
+    const hsn = client_1.sqliteConn.prepare(`SELECT COALESCE(ii.hsn_code,'-') hsn,COALESCE(SUM(ii.quantity),0) quantity,COALESCE(SUM(ii.taxable_value),0) taxable,COALESCE(SUM(ii.cgst_amt),0) cgst,COALESCE(SUM(ii.sgst_amt),0) sgst,COALESCE(SUM(ii.igst_amt),0) igst,COALESCE(SUM(ii.line_total),0) total FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE i.status='COMPLETED' AND i.created_at>=? GROUP BY ii.hsn_code ORDER BY total DESC`).all(since);
+    const profit = client_1.sqliteConn.prepare(`SELECT COALESCE(SUM(ii.taxable_value - (v.purchase_rate*ii.quantity)),0) gross_profit FROM invoice_items ii JOIN product_variants v ON v.id=ii.variant_id JOIN invoices i ON i.id=ii.invoice_id WHERE i.status='COMPLETED' AND i.created_at>=?`).get(since);
+    const expiringSoon = client_1.sqliteConn.prepare(`SELECT p.name,v.sku,v.expiry_date,(SELECT COALESCE(SUM(CASE WHEN type IN ('PURCHASE_IN','SALE_RETURN_IN','ADJUSTMENT_IN','OPENING_STOCK') THEN quantity WHEN type IN ('SALE_OUT','PURCHASE_RETURN_OUT','ADJUSTMENT_OUT') THEN -quantity ELSE 0 END),0) FROM stock_ledger WHERE variant_id=v.id) stock FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.expiry_date IS NOT NULL AND v.expiry_date<=unixepoch()+2592000 AND v.expiry_date>=unixepoch() ORDER BY v.expiry_date`).all();
+    const outstanding = client_1.sqliteConn.prepare(`SELECT COALESCE(SUM(balance_due),0) outstanding FROM invoices WHERE status='COMPLETED'`).get();
+    res.json({ days, sales: { ...sales, outstanding: outstanding.outstanding }, payments, topProducts, lowStock, expiringSoon, salesman, hsn, profit });
+});
+exports.default = router;
+//# sourceMappingURL=reports.js.map
