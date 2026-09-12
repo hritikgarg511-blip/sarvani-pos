@@ -83,14 +83,15 @@ const orderSchema = z.object({
 router.post("/orders", (req, res) => {
   const d = orderSchema.safeParse(req.body);
   if (!d.success) return res.status(400).json({ error: "Invalid website order", details: d.error.flatten() });
-  const db = sqliteConn!;
-  try {
+ const db = sqliteConn!;
+let customerId: string | null = null;
+let draftInvoiceId: string | null = null;
+let createdCustomer = false;
+try {
     const existing = db.prepare("SELECT * FROM website_orders WHERE external_order_id=?").get(d.data.externalOrderId) as any;
     if (existing) return res.json({ ok: true, duplicate: true, orderId: existing.id, status: existing.status, paymentStatus: existing.payment_status, qrExpiresAt: existing.qr_expires_at });
 
-    let customerId: string | null = null;
-    let draftInvoiceId: string | null = null;
-    let createdCustomer = false;
+   
     const existingCustomer = db.prepare("SELECT id FROM customers WHERE phone=?").get(d.data.customerPhone) as any;
     if (existingCustomer) customerId = existingCustomer.id;
     else {
